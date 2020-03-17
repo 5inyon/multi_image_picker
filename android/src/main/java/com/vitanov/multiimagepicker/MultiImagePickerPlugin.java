@@ -97,118 +97,51 @@ public class MultiImagePickerPlugin implements
 
     }
 
-    private static class GetThumbnailTask extends AsyncTask<String, Void, ByteBuffer> {
-        private WeakReference<Activity> activityReference;
-        BinaryMessenger messenger;
-        final String identifier;
-        final int width;
-        final int height;
-        final int quality;
+    private static int getOrientation(Context context, Uri photoUri) {
+        try (Cursor cursor = context.getContentResolver().query(photoUri,
+                new String[]{MediaStore.Images.ImageColumns.ORIENTATION}, null, null, null)) {
 
-        GetThumbnailTask(Activity context, BinaryMessenger messenger, String identifier, int width, int height, int quality) {
-            super();
-            this.messenger = messenger;
-            this.identifier = identifier;
-            this.width = width;
-            this.height = height;
-            this.quality = quality;
-            this.activityReference = new WeakReference<>(context);
-        }
-
-        @Override
-        protected ByteBuffer doInBackground(String... strings) {
-            final Uri uri = Uri.parse(this.identifier);
-            byte[] byteArray = null;
-
-            try {
-                // get a reference to the activity if it is still there
-                Activity activity = activityReference.get();
-                if (activity == null || activity.isFinishing()) return null;
-
-                Bitmap sourceBitmap = getCorrectlyOrientedImage(activity, uri);
-                Bitmap bitmap = ThumbnailUtils.extractThumbnail(sourceBitmap, this.width, this.height, OPTIONS_RECYCLE_INPUT);
-
-                if (bitmap == null) return null;
-
-                ByteArrayOutputStream bitmapStream = new ByteArrayOutputStream();
-                bitmap.compress(Bitmap.CompressFormat.JPEG, this.quality, bitmapStream);
-                byteArray = bitmapStream.toByteArray();
-                bitmap.recycle();
-                bitmapStream.close();
-            } catch (IOException e) {
-                e.printStackTrace();
+            if (cursor == null || cursor.getCount() != 1) {
+                return -1;
             }
 
+            cursor.moveToFirst();
+            return cursor.getInt(0);
+        } catch (CursorIndexOutOfBoundsException ignored) {
 
-            final ByteBuffer buffer;
-            if (byteArray != null) {
-                buffer = ByteBuffer.allocateDirect(byteArray.length);
-                buffer.put(byteArray);
-                return buffer;
-            }
-            return null;
         }
-
-        @Override
-        protected void onPostExecute(ByteBuffer buffer) {
-            super.onPostExecute(buffer);
-            if (buffer != null) {
-                this.messenger.send("multi_image_picker/image/" + this.identifier + ".thumb", buffer);
-                buffer.clear();
-            }
-        }
+        return -1;
     }
 
-    private static class GetImageTask extends AsyncTask<String, Void, ByteBuffer> {
-        private final WeakReference<Activity> activityReference;
-
-        final BinaryMessenger messenger;
-        final String identifier;
-        final int quality;
-
-        GetImageTask(Activity context, BinaryMessenger messenger, String identifier, int quality) {
-            super();
-            this.messenger = messenger;
-            this.identifier = identifier;
-            this.quality = quality;
-            this.activityReference = new WeakReference<>(context);
+    private static Bitmap getCorrectlyOrientedImage(Context context, Uri photoUri) throws IOException {
+        InputStream is = context.getContentResolver().openInputStream(photoUri);
+        BitmapFactory.Options dbo = new BitmapFactory.Options();
+        dbo.inScaled = false;
+        dbo.inSampleSize = 1;
+        dbo.inJustDecodeBounds = true;
+        BitmapFactory.decodeStream(is, null, dbo);
+        if (is != null) {
+            is.close();
         }
 
-        @Override
-        protected ByteBuffer doInBackground(String... strings) {
-            final Uri uri = Uri.parse(this.identifier);
-            byte[] bytesArray = null;
+        int orientation = getOrientation(context, photoUri);
 
-            try {
-                // get a reference to the activity if it is still there
-                Activity activity = activityReference.get();
-                if (activity == null || activity.isFinishing()) return null;
-
-                Bitmap bitmap = getCorrectlyOrientedImage(activity, uri);
-
-                if (bitmap == null) return null;
-
-                ByteArrayOutputStream bitmapStream = new ByteArrayOutputStream();
-                bitmap.compress(Bitmap.CompressFormat.JPEG, this.quality, bitmapStream);
-                bytesArray = bitmapStream.toByteArray();
-                bitmap.recycle();
-                bitmapStream.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-
-            assert bytesArray != null;
-            final ByteBuffer buffer = ByteBuffer.allocateDirect(bytesArray.length);
-            buffer.put(bytesArray);
-            return buffer;
+        Bitmap srcBitmap;
+        is = context.getContentResolver().openInputStream(photoUri);
+        srcBitmap = BitmapFactory.decodeStream(is);
+        if (is != null) {
+            is.close();
         }
 
-        @Override
-        protected void onPostExecute(ByteBuffer buffer) {
-            super.onPostExecute(buffer);
-            this.messenger.send("multi_image_picker/image/" + this.identifier + ".original", buffer);
-            buffer.clear();
+        if (orientation > 0) {
+            Matrix matrix = new Matrix();
+            matrix.postRotate(orientation);
+
+            srcBitmap = Bitmap.createBitmap(srcBitmap, 0, 0, srcBitmap.getWidth(),
+                    srcBitmap.getHeight(), matrix, true);
         }
+
+        return srcBitmap;
     }
 
     @Override
@@ -570,6 +503,7 @@ public class MultiImagePickerPlugin implements
             finishWithError("CANCELLED", "The user has cancelled the selection");
         } else if (requestCode == REQUEST_CODE_CHOOSE && resultCode == Activity.RESULT_OK) {
             List<Uri> photos = data.getParcelableArrayListExtra(Define.INTENT_PATH);
+            if(photos==null) return false;
             List<HashMap<String, Object>> result = new ArrayList<>(photos.size());
             for (Uri uri : photos) {
                 HashMap<String, Object> map = new HashMap<>();
@@ -699,53 +633,6 @@ public class MultiImagePickerPlugin implements
         return result;
     }
 
-    private static int getOrientation(Context context, Uri photoUri) {
-        try (Cursor cursor = context.getContentResolver().query(photoUri,
-                new String[]{MediaStore.Images.ImageColumns.ORIENTATION}, null, null, null)) {
-
-            if (cursor == null || cursor.getCount() != 1) {
-                return -1;
-            }
-
-            cursor.moveToFirst();
-            return cursor.getInt(0);
-        } catch (CursorIndexOutOfBoundsException ignored) {
-
-        }
-        return -1;
-    }
-
-    private static Bitmap getCorrectlyOrientedImage(Context context, Uri photoUri) throws IOException {
-        InputStream is = context.getContentResolver().openInputStream(photoUri);
-        BitmapFactory.Options dbo = new BitmapFactory.Options();
-        dbo.inScaled = false;
-        dbo.inSampleSize = 1;
-        dbo.inJustDecodeBounds = true;
-        BitmapFactory.decodeStream(is, null, dbo);
-        if (is != null) {
-            is.close();
-        }
-
-        int orientation = getOrientation(context, photoUri);
-
-        Bitmap srcBitmap;
-        is = context.getContentResolver().openInputStream(photoUri);
-        srcBitmap = BitmapFactory.decodeStream(is);
-        if (is != null) {
-            is.close();
-        }
-
-        if (orientation > 0) {
-            Matrix matrix = new Matrix();
-            matrix.postRotate(orientation);
-
-            srcBitmap = Bitmap.createBitmap(srcBitmap, 0, 0, srcBitmap.getWidth(),
-                    srcBitmap.getHeight(), matrix, true);
-        }
-
-        return srcBitmap;
-    }
-
     private void finishWithSuccess(List imagePathList) {
         if (pendingResult != null)
             pendingResult.success(imagePathList);
@@ -789,5 +676,118 @@ public class MultiImagePickerPlugin implements
         this.methodCall = methodCall;
         pendingResult = result;
         return true;
+    }
+
+    private static class GetThumbnailTask extends AsyncTask<String, Void, ByteBuffer> {
+        final String identifier;
+        final int width;
+        final int height;
+        final int quality;
+        BinaryMessenger messenger;
+        private WeakReference<Activity> activityReference;
+
+        GetThumbnailTask(Activity context, BinaryMessenger messenger, String identifier, int width, int height, int quality) {
+            super();
+            this.messenger = messenger;
+            this.identifier = identifier;
+            this.width = width;
+            this.height = height;
+            this.quality = quality;
+            this.activityReference = new WeakReference<>(context);
+        }
+
+        @Override
+        protected ByteBuffer doInBackground(String... strings) {
+            final Uri uri = Uri.parse(this.identifier);
+            byte[] byteArray = null;
+
+            try {
+                // get a reference to the activity if it is still there
+                Activity activity = activityReference.get();
+                if (activity == null || activity.isFinishing()) return null;
+
+                Bitmap sourceBitmap = getCorrectlyOrientedImage(activity, uri);
+                Bitmap bitmap = ThumbnailUtils.extractThumbnail(sourceBitmap, this.width, this.height, OPTIONS_RECYCLE_INPUT);
+
+                if (bitmap == null) return null;
+
+                ByteArrayOutputStream bitmapStream = new ByteArrayOutputStream();
+                bitmap.compress(Bitmap.CompressFormat.JPEG, this.quality, bitmapStream);
+                byteArray = bitmapStream.toByteArray();
+                bitmap.recycle();
+                bitmapStream.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+
+            final ByteBuffer buffer;
+            if (byteArray != null) {
+                buffer = ByteBuffer.allocateDirect(byteArray.length);
+                buffer.put(byteArray);
+                return buffer;
+            }
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(ByteBuffer buffer) {
+            super.onPostExecute(buffer);
+            if (buffer != null) {
+                this.messenger.send("multi_image_picker/image/" + this.identifier + ".thumb", buffer);
+                buffer.clear();
+            }
+        }
+    }
+
+    private static class GetImageTask extends AsyncTask<String, Void, ByteBuffer> {
+        final BinaryMessenger messenger;
+        final String identifier;
+        final int quality;
+        private final WeakReference<Activity> activityReference;
+
+        GetImageTask(Activity context, BinaryMessenger messenger, String identifier, int quality) {
+            super();
+            this.messenger = messenger;
+            this.identifier = identifier;
+            this.quality = quality;
+            this.activityReference = new WeakReference<>(context);
+        }
+
+        @Override
+        protected ByteBuffer doInBackground(String... strings) {
+            final Uri uri = Uri.parse(this.identifier);
+            byte[] bytesArray = null;
+
+            try {
+                // get a reference to the activity if it is still there
+                Activity activity = activityReference.get();
+                if (activity == null || activity.isFinishing()) return null;
+
+                Bitmap bitmap = getCorrectlyOrientedImage(activity, uri);
+
+                if (bitmap == null) return null;
+
+                ByteArrayOutputStream bitmapStream = new ByteArrayOutputStream();
+                bitmap.compress(Bitmap.CompressFormat.JPEG, this.quality, bitmapStream);
+                bytesArray = bitmapStream.toByteArray();
+                bitmap.recycle();
+                bitmapStream.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+            assert bytesArray != null;
+            final ByteBuffer buffer = ByteBuffer.allocateDirect(bytesArray.length);
+            buffer.put(bytesArray);
+            return buffer;
+        }
+
+        @Override
+        protected void onPostExecute(ByteBuffer buffer) {
+            super.onPostExecute(buffer);
+            this.messenger.send("multi_image_picker/image/" + this.identifier + ".original", buffer);
+            buffer.clear();
+        }
     }
 }
